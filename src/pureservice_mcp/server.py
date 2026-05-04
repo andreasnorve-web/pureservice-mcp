@@ -5,16 +5,20 @@ Run locally:
     pureservice-mcp --transport http       # HTTP (Railway / Ayfie)
 
 Set PURESERVICE_READ_ONLY=false to enable write tools.
+Set PURESERVICE_GATEWAY_TOKEN=<secret> to require X-MCP-Auth header on HTTP.
 """
 from __future__ import annotations
 
 import argparse
+import hmac
 import os
 
 from fastmcp import FastMCP
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
 
 from .config import settings
-from .tools import statistics, tickets, users
+from .tools import departments, statistics, tickets, users
 
 mcp: FastMCP = FastMCP(
     name="pureservice-mcp",
@@ -38,6 +42,16 @@ mcp.tool(users.get_user)
 mcp.tool(statistics.count_tickets_by_status)
 mcp.tool(statistics.list_statuses)
 
+# Department / zone tools
+mcp.tool(departments.list_departments)
+mcp.tool(departments.list_ticket_types)
+mcp.tool(departments.list_request_types)
+mcp.tool(departments.list_tickets_by_department)
+mcp.tool(departments.list_hr_tickets)
+mcp.tool(departments.list_it_tickets)
+mcp.tool(departments.list_economy_tickets)
+mcp.tool(departments.department_overview)
+
 # ----------------------------------------------------------------------
 # Write tools (only when READ_ONLY=false)
 # ----------------------------------------------------------------------
@@ -46,6 +60,35 @@ if not settings.read_only:
     mcp.tool(tickets.update_ticket)
     mcp.tool(tickets.update_ticket_status)
     mcp.tool(tickets.assign_ticket)
+
+
+# ----------------------------------------------------------------------
+# Gateway auth middleware (HTTP transport only)
+# ----------------------------------------------------------------------
+class GatewayAuthMiddleware(BaseHTTPMiddleware):
+    """Require X-MCP-Auth header to match settings.gateway_token.
+
+    If gateway_token is empty (default), no auth is enforced.
+    Constant-time comparison via hmac.compare_digest avoids timing leaks.
+    """
+
+    HEADER_NAME = "x-mcp-auth"
+
+    async def dispatch(self, request, call_next):
+        if not settings.gateway_token:
+            return await call_next(request)
+
+        # Allow OPTIONS preflight without auth (CORS)
+        if request.method == "OPTIONS":
+            return await call_next(request)
+
+        provided = request.headers.get(self.HEADER_NAME, "")
+        if not hmac.compare_digest(provided, settings.gateway_token):
+            return JSONResponse(
+                {"error": "unauthorized", "message": "Missing or invalid X-MCP-Auth header"},
+                status_code=401,
+            )
+        return await call_next(request)
 
 
 # ----------------------------------------------------------------------
@@ -73,7 +116,14 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.transport == "http":
-        mcp.run(transport="http", host=args.host, port=args.port)
+        # Attach the auth middleware to the underlying ASGI app.
+        # FastMCP exposes http_app() which returns a Starlette app we can wrap.
+        app = mcp.http_app()
+        app.add_middleware(GatewayAuthMiddleware)
+
+        import uvicorn
+
+        uvicorn.run(app, host=args.host, port=args.port)
     else:
         mcp.run()  # stdio
 

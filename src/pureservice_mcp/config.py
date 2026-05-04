@@ -39,6 +39,12 @@ class Settings(BaseSettings):
     # Bruk /api for offentleg API om instansen din støttar det.
     api_base_path: str = "/agent/api"
 
+    # Optional gateway token: if set, incoming HTTP requests must include
+    # the matching value in the X-MCP-Auth header (or whatever header name
+    # the upstream client uses). Leave empty to disable auth (NOT recommended
+    # for production deploys).
+    gateway_token: str = ""
+
     @property
     def base_url(self) -> str:
         return f"https://{self.tenant}.pureservice.com{self.api_base_path}"
