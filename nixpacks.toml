@@ -1,0 +1,11 @@
+# Tell Nixpacks to install our package as editable so the
+# `pureservice-mcp` console script can import the `pureservice_mcp` module.
+[phases.install]
+cmds = [
+    "python -m venv --copies /opt/venv",
+    "/opt/venv/bin/pip install --upgrade pip",
+    "/opt/venv/bin/pip install -e .",
+]
+
+[start]
+cmd = "/opt/venv/bin/pureservice-mcp --transport http --host 0.0.0.0 --port $PORT"
